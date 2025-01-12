@@ -1,7 +1,8 @@
 # Define a log file to store script actions
 $LogFile = Join-Path -Path $env:TEMP -ChildPath "SMT_Log.txt"
-Clear-Content -Path "$LogFile"
-
+if (Test-Path -Path $LogFile) {
+    Clear-Content -Path "$LogFile"
+}
 
 # Function to log messages
 function Log-Message {

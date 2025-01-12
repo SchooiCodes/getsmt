@@ -1,5 +1,7 @@
 # Define a log file to store script actions
 $LogFile = Join-Path -Path $env:TEMP -ChildPath "SMT_Log.txt"
+Clear-Content -Path "$LogFile"
+
 
 # Function to log messages
 function Log-Message {
@@ -22,11 +24,12 @@ function Show-Status {
 
 # Check if the script is running as an administrator
 if (([Security.Principal.WindowsIdentity]::GetCurrent()).Owner.Value -ne "S-1-5-32-544") {
+	Show-Status ""
     Show-Status "===========================================" 'Red'
-    Show-Status "-- Scripts must be run as Administrator ---" 'Red'
-    Show-Status "-- Right-Click Start -> Terminal(Admin) ---" 'Red'
+    Show-Status "--- Script must be run as Administrator ---" 'Red'
     Show-Status "===========================================" 'Red'
-
+    Show-Status "Please start Powershell or Terminal as an Administrator and run the command again." 'White'
+    Show-Status "(Right click on Start -> Terminal/Powershell (Admin) or WIN + R -> powershell -> CTRL + SHIFT + ENTER)" 'Cyan'
     # Prompt the user to restart using choice.exe
 #    $choiceCmd = "$env:SystemRoot\System32\choice.exe /c YN /t 60 /D Y /N /M `"Would you like to restart as Administrator? (Y/N)`""
 #    Invoke-Expression $choiceCmd
@@ -35,13 +38,12 @@ if (([Security.Principal.WindowsIdentity]::GetCurrent()).Owner.Value -ne "S-1-5-
 #        if ([int](Get-CimInstance -Class Win32_OperatingSystem | Select-Object -ExpandProperty BuildNumber) -ge 6000) {
 #            $CommandLine = "-File `"" + $MyInvocation.MyCommand.Path + "`" " + ($MyInvocation.UnboundArguments -join ' ')
 #            Start-Process -FilePath PowerShell.exe -Verb RunAs -ArgumentList $CommandLine
-#            exit
+	exit
 #        }
 #    } else {
 #        Show-Status "User declined to restart as Administrator. Exiting.." 'Yellow'
-        exit
+#        exit
 #    }
-	GOTO :EOF
 }
 
 Show-Status "Creating temporary directory for setup files.."
@@ -51,9 +53,15 @@ if (-not (Test-Path $SMTTempPath)) {
     Show-Status "Temporary directory created at: $SMTTempPath"
 }
 
-Show-Status "Creating skip message box marker file.."
 $SkipMsgBoxPath = Join-Path -Path $SMTTempPath -ChildPath "SkipMSGBox"
-New-Item -Path $SkipMsgBoxPath -ItemType File | Out-Null
+
+if (-Not (Test-Path -Path $SkipMsgBoxPath)) {
+    Show-Status "Creating skip message box marker file.."
+    New-Item -Path $SkipMsgBoxPath -ItemType File | Out-Null
+} else {
+    Show-Status "Skip message box marker file already exists."
+}
+
 
 Show-Status "Adding antivirus exclusion for setup executable.."
 Add-MpPreference -ExclusionPath "$SMTTempPath\SMTSetup.exe"
@@ -71,7 +79,7 @@ try {
     exit
 }
 
-Show-Status "Installing setup..." 'Cyan'
+Show-Status "Installing SMT..." 'Cyan'
 try {
     Start-Process -FilePath $setupPath -Wait
     Show-Status "Installation completed successfully." 'Green'

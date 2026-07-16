@@ -1,95 +1,213 @@
-# Define a log file to store script actions
-$LogFile = Join-Path -Path $env:TEMP -ChildPath "SMT_Log.txt"
-if (Test-Path -Path $LogFile) {
-    Clear-Content -Path "$LogFile"
-}
+#Requires -Version 5.1
+<#
+    Schooi's Multitool (SMT) Installer/Bootstrapper
+    Downloads and runs the SMT setup executable, handling self-elevation,
+    AV exclusions (with Tamper Protection detection), retries, and cleanup.
+    Installer will still attempt to run even if the AV exclusion fails.
+#>
 
-# Function to log messages
-function Log-Message {
-    param (
+param(
+    [switch]$Silent
+)
+
+Set-StrictMode -Version Latest
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+$LogFile        = Join-Path $env:TEMP 'SMT_Log.txt'
+$SMTTempPath    = Join-Path $env:TEMP 'SMT'
+$SkipMsgBoxPath = Join-Path $SMTTempPath 'SkipMSGBox'
+$SetupPath      = Join-Path $SMTTempPath 'SMTSetup.exe'
+$SetupUrl       = 'https://github.com/SchooiCodes/smt/raw/main/Schooi%27s%20Multitool%20Setup.exe'
+$ScriptUrl      = 'https://smt.gleeze.com'
+$MaxAttempts    = 3
+
+if (Test-Path $LogFile) { Clear-Content -Path $LogFile }
+
+# ---------------------------------------------------------------------------
+# Logging helpers
+# ---------------------------------------------------------------------------
+function Write-Log {
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
         [string]$Message
     )
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    "$timestamp - $Message" | Out-File -FilePath $LogFile -Append
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    Add-Content -Path $LogFile -Value "$timestamp - $Message"
 }
 
-# Function to display and log status messages
 function Show-Status {
-    param (
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
         [string]$Message,
         [ConsoleColor]$Color = 'Gray'
     )
     Write-Host $Message -ForegroundColor $Color
-    Log-Message $Message
+    Write-Log $Message
 }
 
-# Check if the script is running as an administrator
-if (([Security.Principal.WindowsIdentity]::GetCurrent()).Owner.Value -ne "S-1-5-32-544") {
-	Show-Status ""
-    Show-Status "===========================================" 'Red'
-    Show-Status "--- Script must be run as Administrator ---" 'Red'
-    Show-Status "===========================================" 'Red'
-    Show-Status "Please start Powershell or Terminal as an Administrator and run the command again." 'White'
-    Show-Status "(Right click on Start -> Terminal/Powershell (Admin) or WIN + R -> powershell -> CTRL + SHIFT + ENTER)" 'Cyan'
-    # Prompt the user to restart using choice.exe
-#    $choiceCmd = "$env:SystemRoot\System32\choice.exe /c YN /t 60 /D Y /N /M `"Would you like to restart as Administrator? (Y/N)`""
-#    Invoke-Expression $choiceCmd
-#    if ($LASTEXITCODE -eq 1) {
-#        Show-Status "Restarting as Administrator.."
-#        if ([int](Get-CimInstance -Class Win32_OperatingSystem | Select-Object -ExpandProperty BuildNumber) -ge 6000) {
-#            $CommandLine = "-File `"" + $MyInvocation.MyCommand.Path + "`" " + ($MyInvocation.UnboundArguments -join ' ')
-#            Start-Process -FilePath PowerShell.exe -Verb RunAs -ArgumentList $CommandLine
-	exit
-#        }
-#    } else {
-#        Show-Status "User declined to restart as Administrator. Exiting.." 'Yellow'
-#        exit
-#    }
+# ---------------------------------------------------------------------------
+# OS / architecture gate
+# ---------------------------------------------------------------------------
+if (-not [Environment]::Is64BitOperatingSystem) {
+    Show-Status 'SMT requires a 64-bit version of Windows 10/11. This PC is not supported.' 'Red'
+    exit 1
 }
 
-Show-Status "Creating temporary directory for setup files.."
-$SMTTempPath = Join-Path -Path $env:TEMP -ChildPath "SMT"
-if (-not (Test-Path $SMTTempPath)) {
-    New-Item -Path $SMTTempPath -ItemType Directory | Out-Null
-    Show-Status "Temporary directory created at: $SMTTempPath"
-}
+# ---------------------------------------------------------------------------
+# Admin check + self-elevation
+# ---------------------------------------------------------------------------
+$currentPrincipal = New-Object Security.Principal.WindowsPrincipal(
+    [Security.Principal.WindowsIdentity]::GetCurrent()
+)
+$isAdmin = $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
-$SkipMsgBoxPath = Join-Path -Path $SMTTempPath -ChildPath "SkipMSGBox"
+if (-not $isAdmin) {
+    Show-Status ''
+    Show-Status '=========================================================' 'Red'
+    Show-Status '--- Elevation required — relaunching as Administrator ---' 'Red'
+    Show-Status '=========================================================' 'Red'
 
-if (-Not (Test-Path -Path $SkipMsgBoxPath)) {
-    Show-Status "Creating skip message box marker file.."
-    New-Item -Path $SkipMsgBoxPath -ItemType File | Out-Null
-} else {
-    Show-Status "Skip message box marker file already exists."
-}
+    # Reconstruct bound parameters (e.g. -Silent) for the relaunch — $args alone
+    # only captures *unbound* positional args, not switches like -Silent.
+    $boundArgs = foreach ($entry in $PSBoundParameters.GetEnumerator()) {
+        if ($entry.Value -is [switch]) {
+            if ($entry.Value.IsPresent) { "-$($entry.Key)" }
+        } else {
+            "-$($entry.Key) `"$($entry.Value)`""
+        }
+    }
 
+    if ($PSCommandPath) {
+        # Running from a real .ps1 file on disk
+        $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"") + $boundArgs
+    } else {
+        # Running via irm | iex — no file exists on disk, so re-fetch and re-run remotely
+        $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "irm '$ScriptUrl' | iex") + $boundArgs
+    }
 
-Show-Status "Adding antivirus exclusion for setup executable.."
-Add-MpPreference -ExclusionPath "$SMTTempPath\SMTSetup.exe"
-
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ProgressPreference = 'SilentlyContinue'
-
-Show-Status "Downloading setup executable.." 'Cyan'
-$setupPath = Join-Path -Path $SMTTempPath -ChildPath "SMTSetup.exe"
-try {
-    Invoke-RestMethod -Uri "https://github.com/SchooiCodes/smt/raw/main/Schooi's%20Multitool%20Setup.exe" -OutFile $setupPath
-    Show-Status "Download completed successfully." 'Green'
-} catch {
-    Show-Status "Error: Failed to download setup executable. $_" 'Red'
+    try {
+        Start-Process -FilePath PowerShell.exe -Verb RunAs -ArgumentList $argList -ErrorAction Stop
+    } catch {
+        Show-Status 'Elevation was cancelled or failed.' 'Red'
+        Show-Status 'Please start PowerShell or Terminal as an Administrator and run the command again.' 'White'
+        Show-Status '(Right click Start -> Terminal/PowerShell (Admin), or WIN + R -> powershell -> CTRL+SHIFT+ENTER)' 'Cyan'
+        exit 1
+    }
     exit
 }
 
-Show-Status "Installing SMT..." 'Cyan'
-try {
-    Start-Process -FilePath $setupPath -Wait
-    Show-Status "Installation completed successfully." 'Green'
-} catch {
-    Show-Status "Error: Failed to install setup." 'Red'
+# ---------------------------------------------------------------------------
+# Prep working directory
+# ---------------------------------------------------------------------------
+Show-Status 'Creating temporary directory for setup files..'
+if (-not (Test-Path $SMTTempPath)) {
+    New-Item -Path $SMTTempPath -ItemType Directory -Force | Out-Null
+    Show-Status "Temporary directory created at: $SMTTempPath"
 }
 
-Show-Status "Cleaning up temporary files and antivirus exclusion.."
-Remove-Item -Path $SMTTempPath -Recurse -Force
-Remove-MpPreference -ExclusionPath "$setupPath"
+if (-not (Test-Path $SkipMsgBoxPath)) {
+    Show-Status 'Creating skip message box marker file..'
+    New-Item -Path $SkipMsgBoxPath -ItemType File -Force | Out-Null
+} else {
+    Show-Status 'Skip message box marker file already exists.'
+}
 
-Show-Status "Script execution completed." 'Green'
+# ---------------------------------------------------------------------------
+# Tamper Protection check
+# ---------------------------------------------------------------------------
+function Test-TamperProtectionEnabled {
+    try {
+        $status = Get-MpComputerStatus -ErrorAction Stop
+        return [bool]$status.IsTamperProtected
+    } catch {
+        return $null   # Get-MpComputerStatus missing/failing — likely third-party AV active
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Download + install (with guaranteed cleanup)
+# Note: the AV exclusion step never blocks the install — if it fails or can't
+# be verified, the script logs why and proceeds to download/install anyway.
+# ---------------------------------------------------------------------------
+$exclusionAdded = $false
+
+try {
+    Show-Status 'Checking antivirus configuration..'
+    $tamperStatus = Test-TamperProtectionEnabled
+
+    if ($tamperStatus -eq $true) {
+        Show-Status 'Tamper Protection is enabled — exclusions cannot be set automatically.' 'Yellow'
+        if (-not $Silent) {
+            Show-Status 'Opening Windows Security so you can add the exclusion manually (Virus & threat protection > Manage settings > Exclusions)..' 'Cyan'
+            Start-Process 'windowsdefender://'
+            Show-Status 'Press Enter to continue — installation will proceed either way.' 'White'
+            Read-Host | Out-Null
+        } else {
+            Show-Status 'Running in -Silent mode — continuing without an exclusion.' 'Yellow'
+        }
+    } elseif ($tamperStatus -eq $false) {
+        Show-Status 'Adding antivirus exclusion for setup executable..'
+        try {
+            Add-MpPreference -ExclusionPath $SetupPath -ErrorAction Stop
+            Start-Sleep -Milliseconds 500   # allow the preference store to update
+
+            $currentExclusions = (Get-MpPreference -ErrorAction Stop).ExclusionPath
+            if ($currentExclusions -contains $SetupPath) {
+                $exclusionAdded = $true
+                Show-Status 'Exclusion confirmed.' 'Green'
+            } else {
+                Show-Status 'Exclusion did not apply for an unknown reason. Continuing anyway.' 'Yellow'
+            }
+        } catch {
+            Show-Status "Could not set AV exclusion, continuing without it: $_" 'Yellow'
+        }
+    } else {
+        Show-Status 'Could not determine Defender status (a third-party AV may be active). Continuing without an exclusion.' 'Yellow'
+    }
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $ProgressPreference = 'SilentlyContinue'   # speeds up Invoke-WebRequest substantially
+
+    Show-Status 'Downloading setup executable..' 'Cyan'
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            Invoke-WebRequest -Uri $SetupUrl -OutFile $SetupPath -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+            break
+        } catch {
+            if ($attempt -eq $MaxAttempts) { throw }
+            Show-Status "Download attempt $attempt failed, retrying.." 'Yellow'
+            Start-Sleep -Seconds (2 * $attempt)
+        }
+    }
+
+    if (-not (Test-Path $SetupPath) -or (Get-Item $SetupPath).Length -lt 100KB) {
+        throw 'Downloaded file looks incomplete or invalid (size check failed).'
+    }
+    Show-Status 'Download completed successfully.' 'Green'
+
+    Show-Status 'Installing SMT..' 'Cyan'
+    $proc = Start-Process -FilePath $SetupPath -Wait -PassThru
+    if ($proc.ExitCode -ne 0) {
+        throw "Installer exited with code $($proc.ExitCode)."
+    }
+    Show-Status 'Installation completed successfully.' 'Green'
+}
+catch {
+    Show-Status "Error: $_" 'Red'
+    exit 1
+}
+finally {
+    Show-Status 'Cleaning up temporary files and antivirus exclusion..'
+    if ($exclusionAdded) {
+        Remove-MpPreference -ExclusionPath $SetupPath -ErrorAction SilentlyContinue
+    }
+    if (Test-Path $SMTTempPath) {
+        Remove-Item -Path $SMTTempPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Show-Status 'Script execution completed.' 'Green'

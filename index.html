@@ -109,13 +109,6 @@ if (-not (Test-Path $SMTTempPath)) {
     Show-Status "Temporary directory created at: $SMTTempPath"
 }
 
-if (-not (Test-Path $SkipMsgBoxPath)) {
-    Show-Status 'Creating skip message box marker file..'
-    New-Item -Path $SkipMsgBoxPath -ItemType File -Force | Out-Null
-} else {
-    Show-Status 'Skip message box marker file already exists.'
-}
-
 # ---------------------------------------------------------------------------
 # Tamper Protection check
 # ---------------------------------------------------------------------------
@@ -142,10 +135,8 @@ try {
     if ($tamperStatus -eq $true) {
         Show-Status 'Tamper Protection is enabled — exclusions cannot be set automatically.' 'Yellow'
         if (-not $Silent) {
-            Show-Status 'Opening Windows Security so you can add the exclusion manually (Virus & threat protection > Manage settings > Exclusions)..' 'Cyan'
-            Start-Process 'windowsdefender://'
-            Show-Status 'Press Enter to continue — installation will proceed either way.' 'White'
-            Read-Host | Out-Null
+            Show-Status 'Skipping Defender exclusion.' 'Yellow'
+			Show-Status 'If SMT's files get falsely flagged, you can add the exclusion manually (Virus & threat protection > Manage settings > Exclusions).' 'Cyan'
         } else {
             Show-Status 'Running in -Silent mode — continuing without an exclusion.' 'Yellow'
         }
@@ -190,7 +181,7 @@ try {
     Show-Status 'Download completed successfully.' 'Green'
 
     Show-Status 'Installing SMT..' 'Cyan'
-    $proc = Start-Process -FilePath $SetupPath -Wait -PassThru
+    $proc = Start-Process -FilePath $SetupPath /S -Wait -PassThru
     if ($proc.ExitCode -ne 0) {
         throw "Installer exited with code $($proc.ExitCode)."
     }

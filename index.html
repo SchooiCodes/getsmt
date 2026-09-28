@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
     Schooi's Multitool (SMT) Installer/Bootstrapper
     Downloads and runs the SMT setup executable, handling self-elevation,
@@ -6,54 +6,43 @@
     Installer will still attempt to run even if the AV exclusion fails.
 #>
 
-param(
-    [switch]$Silent
-)
-
 Set-StrictMode -Version Latest
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-$LogFile        = Join-Path $env:TEMP 'SMT_Log.txt'
-$SMTTempPath    = Join-Path $env:TEMP 'SMT'
-$SkipMsgBoxPath = Join-Path $SMTTempPath 'SkipMSGBox'
-$SetupPath      = Join-Path $SMTTempPath 'SMTSetup.exe'
-$SetupUrl       = 'https://github.com/SchooiCodes/smt/raw/main/Schooi%27s%20Multitool%20Setup.exe'
-$ScriptUrl      = 'https://smt.gleeze.com'
-$MaxAttempts    = 3
+$SMTTempPath = Join-Path $env:TEMP 'SMT'
+$SetupPath   = Join-Path $SMTTempPath 'SMTSetup.exe'
+$SetupUrl    = 'https://github.com/SchooiCodes/smt/raw/main/Schooi%27s%20Multitool%20Setup.exe'
+$ScriptUrl   = 'https://smt.gleeze.com'
+$MaxAttempts = 3
+$ESC = [char]27
+$Bright_Green  = "$ESC[92m"
+$Bright_Red    = "$ESC[91m"
+$Bright_Yellow = "$ESC[93m"
+$Reset         = "$ESC[0m"
 
-if (Test-Path $LogFile) { Clear-Content -Path $LogFile }
+Write-Host ''
+Write-Host '░██████╗░█████╗░██╗░░██╗░█████╗░░█████╗░██╗██╗░██████╗
+██╔════╝██╔══██╗██║░░██║██╔══██╗██╔══██╗██║╚█║██╔════╝
+╚█████╗░██║░░╚═╝███████║██║░░██║██║░░██║██║░╚╝╚█████╗░
+░╚═══██╗██║░░██╗██╔══██║██║░░██║██║░░██║██║░░░░╚═══██╗
+██████╔╝╚█████╔╝██║░░██║╚█████╔╝╚█████╔╝██║░░░██████╔╝
+╚═════╝░░╚════╝░╚═╝░░╚═╝░╚════╝░░╚════╝░╚═╝░░░╚═════╝░
 
-# ---------------------------------------------------------------------------
-# Logging helpers
-# ---------------------------------------------------------------------------
-function Write-Log {
-    param(
-        [Parameter(Mandatory)]
-        [AllowEmptyString()]
-        [string]$Message
-    )
-    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    Add-Content -Path $LogFile -Value "$timestamp - $Message"
-}
-
-function Show-Status {
-    param(
-        [Parameter(Mandatory)]
-        [AllowEmptyString()]
-        [string]$Message,
-        [ConsoleColor]$Color = 'Gray'
-    )
-    Write-Host $Message -ForegroundColor $Color
-    Write-Log $Message
-}
+███╗░░░███╗██╗░░░██╗██╗░░░░░████████╗██╗████████╗░█████╗░░█████╗░██╗░░░░░
+████╗░████║██║░░░██║██║░░░░░╚══██╔══╝██║╚══██╔══╝██╔══██╗██╔══██╗██║░░░░░
+██╔████╔██║██║░░░██║██║░░░░░░░░██║░░░██║░░░██║░░░██║░░██║██║░░██║██║░░░░░
+██║╚██╔╝██║██║░░░██║██║░░░░░░░░██║░░░██║░░░██║░░░██║░░██║██║░░██║██║░░░░░
+██║░╚═╝░██║╚██████╔╝███████╗░░░██║░░░██║░░░██║░░░╚█████╔╝╚█████╔╝███████╗
+╚═╝░░░░░╚═╝░╚═════╝░╚══════╝░░░╚═╝░░░╚═╝░░░╚═╝░░░░╚════╝░░╚════╝░╚══════╝'
+Write-Host ''
 
 # ---------------------------------------------------------------------------
 # OS / architecture gate
 # ---------------------------------------------------------------------------
 if (-not [Environment]::Is64BitOperatingSystem) {
-    Show-Status 'SMT requires a 64-bit version of Windows 10/11. This PC is not supported.' 'Red'
+    Write-Host [$Bright_Red-$Reset] SMT requires a 64-bit version of Windows 10/11. This PC is not supported.
     exit 1
 }
 
@@ -66,35 +55,22 @@ $currentPrincipal = New-Object Security.Principal.WindowsPrincipal(
 $isAdmin = $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
 if (-not $isAdmin) {
-    Show-Status ''
-    Show-Status '=========================================================' 'Red'
-    Show-Status '--- Elevation required — relaunching as Administrator ---' 'Red'
-    Show-Status '=========================================================' 'Red'
-
-    # Reconstruct bound parameters (e.g. -Silent) for the relaunch — $args alone
-    # only captures *unbound* positional args, not switches like -Silent.
-    $boundArgs = foreach ($entry in $PSBoundParameters.GetEnumerator()) {
-        if ($entry.Value -is [switch]) {
-            if ($entry.Value.IsPresent) { "-$($entry.Key)" }
-        } else {
-            "-$($entry.Key) `"$($entry.Value)`""
-        }
-    }
+    Write-Host [$Bright_Red-$Reset] Elevation required! Restarting as administrator..
 
     if ($PSCommandPath) {
         # Running from a real .ps1 file on disk
-        $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"") + $boundArgs
+        $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
     } else {
-        # Running via irm | iex — no file exists on disk, so re-fetch and re-run remotely
-        $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "irm '$ScriptUrl' | iex") + $boundArgs
+        # Running via irm | iex - no file exists on disk, so re-fetch and re-run remotely
+        $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "irm '$ScriptUrl' | iex")
     }
 
     try {
         Start-Process -FilePath PowerShell.exe -Verb RunAs -ArgumentList $argList -ErrorAction Stop
     } catch {
-        Show-Status 'Elevation was cancelled or failed.' 'Red'
-        Show-Status 'Please start PowerShell or Terminal as an Administrator and run the command again.' 'White'
-        Show-Status '(Right click Start -> Terminal/PowerShell (Admin), or WIN + R -> powershell -> CTRL+SHIFT+ENTER)' 'Cyan'
+        Write-Host [$Bright_Red-$Reset] Elevation was cancelled or failed.
+        Write-Host [$Bright_Yellow!$Reset] "Please start PowerShell or Terminal as an Administrator and run the command again."
+        Write-Host [$Bright_Yellow!$Reset] "(Right click Start -> Terminal/PowerShell (Admin), or WIN + R -> powershell -> CTRL+SHIFT+ENTER)"
         exit 1
     }
     exit
@@ -103,11 +79,7 @@ if (-not $isAdmin) {
 # ---------------------------------------------------------------------------
 # Prep working directory
 # ---------------------------------------------------------------------------
-Show-Status 'Creating temporary directory for setup files..'
-if (-not (Test-Path $SMTTempPath)) {
-    New-Item -Path $SMTTempPath -ItemType Directory -Force | Out-Null
-    Show-Status "Temporary directory created at: $SMTTempPath"
-}
+New-Item -Path $SMTTempPath -ItemType Directory -Force | Out-Null
 
 # ---------------------------------------------------------------------------
 # Tamper Protection check
@@ -117,31 +89,26 @@ function Test-TamperProtectionEnabled {
         $status = Get-MpComputerStatus -ErrorAction Stop
         return [bool]$status.IsTamperProtected
     } catch {
-        return $null   # Get-MpComputerStatus missing/failing — likely third-party AV active
+        return $null   # Get-MpComputerStatus missing/failing - likely third-party AV active
     }
 }
 
 # ---------------------------------------------------------------------------
 # Download + install (with guaranteed cleanup)
-# Note: the AV exclusion step never blocks the install — if it fails or can't
-# be verified, the script logs why and proceeds to download/install anyway.
+# Note: the AV exclusion step never blocks the install - if it fails or can't
+# be verified, the script prints why and proceeds to download/install anyway.
 # ---------------------------------------------------------------------------
 $exclusionAdded = $false
 
 try {
-    Show-Status 'Checking antivirus configuration..'
     $tamperStatus = Test-TamperProtectionEnabled
 
     if ($tamperStatus -eq $true) {
-        Show-Status 'Tamper Protection is enabled — exclusions cannot be set automatically.' 'Yellow'
-        if (-not $Silent) {
-            Show-Status 'Skipping Defender exclusion.' 'Yellow'
-			Show-Status 'If SMT's files get falsely flagged, you can add the exclusion manually (Virus & threat protection > Manage settings > Exclusions).' 'Cyan'
-        } else {
-            Show-Status 'Running in -Silent mode — continuing without an exclusion.' 'Yellow'
-        }
+        Write-Host [$Bright_Red-$Reset] Tamper Protection is enabled - exclusions cannot be set automatically.
+        Write-Host [$Bright_Red-$Reset] Skipping Defender exclusion.
+        Write-Host [$Bright_Yellow!$Reset] If files get falsely flagged, you can add the exclusion manually "(Virus & threat protection > Manage settings > Exclusions)".
     } elseif ($tamperStatus -eq $false) {
-        Show-Status 'Adding antivirus exclusion for setup executable..'
+        Write-Host [$Bright_Yellow~$Reset] Adding antivirus exclusion for setup executable..
         try {
             Add-MpPreference -ExclusionPath $SetupPath -ErrorAction Stop
             Start-Sleep -Milliseconds 500   # allow the preference store to update
@@ -149,50 +116,50 @@ try {
             $currentExclusions = (Get-MpPreference -ErrorAction Stop).ExclusionPath
             if ($currentExclusions -contains $SetupPath) {
                 $exclusionAdded = $true
-                Show-Status 'Exclusion confirmed.' 'Green'
+                Write-Host [$Bright_Green+$Reset] Exclusion confirmed.
             } else {
-                Show-Status 'Exclusion did not apply for an unknown reason. Continuing anyway.' 'Yellow'
+                Write-Host [$Bright_Red-$Reset] Exclusion did not apply for an unknown reason. Continuing anyway.
             }
         } catch {
-            Show-Status "Could not set AV exclusion, continuing without it: $_" 'Yellow'
+            Write-Host [$Bright_Red-$Reset] Could not set AV exclusion, continuing without it: $_
         }
     } else {
-        Show-Status 'Could not determine Defender status (a third-party AV may be active). Continuing without an exclusion.' 'Yellow'
+        Write-Host [$Bright_Red-$Reset] Could not determine Defender status (a third-party AV may be active). Continuing without an exclusion.
     }
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $ProgressPreference = 'SilentlyContinue'   # speeds up Invoke-WebRequest substantially
 
-    Show-Status 'Downloading setup executable..' 'Cyan'
+    Write-Host [$Bright_Yellow~$Reset] Downloading setup executable..
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         try {
             Invoke-WebRequest -Uri $SetupUrl -OutFile $SetupPath -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
             break
         } catch {
             if ($attempt -eq $MaxAttempts) { throw }
-            Show-Status "Download attempt $attempt failed, retrying.." 'Yellow'
+            Write-Host [$Bright_Red-$Reset] Download attempt $attempt failed, retrying..
             Start-Sleep -Seconds (2 * $attempt)
         }
     }
 
-    if (-not (Test-Path $SetupPath) -or (Get-Item $SetupPath).Length -lt 100KB) {
+    if ((Get-Item $SetupPath).Length -lt 100KB) {
         throw 'Downloaded file looks incomplete or invalid (size check failed).'
     }
-    Show-Status 'Download completed successfully.' 'Green'
+    Write-Host [$Bright_Green+$Reset] Download completed successfully.
 
-    Show-Status 'Installing SMT..' 'Cyan'
+    Write-Host [$Bright_Yellow~$Reset] Installing SMT..
     $proc = Start-Process -FilePath $SetupPath /S -Wait -PassThru
     if ($proc.ExitCode -ne 0) {
         throw "Installer exited with code $($proc.ExitCode)."
     }
-    Show-Status 'Installation completed successfully.' 'Green'
+    Write-Host [$Bright_Green+$Reset] Installation completed successfully.
 }
 catch {
-    Show-Status "Error: $_" 'Red'
+    Write-Host [$Bright_Red-$Reset] "Error: $_"
     exit 1
 }
 finally {
-    Show-Status 'Cleaning up temporary files and antivirus exclusion..'
+    Write-Host [$Bright_Yellow~$Reset] Cleaning up temporary files and antivirus exclusion..
     if ($exclusionAdded) {
         Remove-MpPreference -ExclusionPath $SetupPath -ErrorAction SilentlyContinue
     }
@@ -201,4 +168,5 @@ finally {
     }
 }
 
-Show-Status 'Script execution completed.' 'Green'
+Write-Host [$Bright_Green+$Reset] Script execution completed.
+Write-Host

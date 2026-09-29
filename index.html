@@ -148,7 +148,7 @@ try {
     Write-Host [$Bright_Green+$Reset] Download completed successfully.
 
     Write-Host [$Bright_Yellow~$Reset] Installing SMT..
-    $proc = Start-Process -FilePath $SetupPath /S -Wait -PassThru
+    $proc = Start-Process -FilePath $SetupPath /S /NOLAUNCH -Wait -PassThru
     if ($proc.ExitCode -ne 0) {
         throw "Installer exited with code $($proc.ExitCode)."
     }
